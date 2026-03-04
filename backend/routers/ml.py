@@ -42,7 +42,8 @@ async def predict_flood_risk(features: List[NormalizedFeatures]):
         "impervious_surface_ratio": 0.10,
         "slope_gradient": 0.05,
         "infrastructure_vulnerability_score": 0.03,
-        "population_exposure_index": 0.02
+        "population_exposure_index": 0.02,
+        "capacity_exceedance_ratio": 0.25 # New: High weight for calculated flood volume
     }
     
     # Generate risk scores (Mocking Inference since we do not have a pre-trained model on disk)
@@ -55,7 +56,8 @@ async def predict_flood_risk(features: List[NormalizedFeatures]):
             feature.drainage_proximity_index * explainability["drainage_proximity_index"] +
             feature.rainfall_intensity_index * explainability["rainfall_intensity_index"] +
             feature.impervious_surface_ratio * explainability["impervious_surface_ratio"] +
-            feature.slope_gradient * explainability["slope_gradient"]
+            feature.slope_gradient * explainability["slope_gradient"] +
+            feature.capacity_exceedance_ratio * explainability["capacity_exceedance_ratio"] # Incorporate GIS volume logic
         )
         
         # Add some non-linear simulation 

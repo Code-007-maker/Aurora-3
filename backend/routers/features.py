@@ -13,6 +13,7 @@ class GridFeatureRequest(BaseModel):
     rainfall_mm: float = None # Allow missing, fallback to avg
     population: int = None # Allow missing, fallback to ward dist
     infrastructure_count: int = 0
+    ward_drainage_efficiency: float = 0.8 # New: Operational readiness score of drains (from readiness API)
 
 class NormalizedFeatures(BaseModel):
     grid_id: str
@@ -23,6 +24,8 @@ class NormalizedFeatures(BaseModel):
     rainfall_intensity_index: float
     population_exposure_index: float
     infrastructure_vulnerability_score: float
+    capacity_exceedance_ratio: float # New: Critical GIS metric
+    effective_drainage_capacity_mm_hr: float # New: Dynamic capacity
 
 @router.post("/calculate", response_model=List[NormalizedFeatures])
 async def calculate_features(requests: List[GridFeatureRequest]):
@@ -42,6 +45,9 @@ async def calculate_features(requests: List[GridFeatureRequest]):
     AVG_POP = 50 # persons per cell fallback
     MAX_POP = 1000 
     MAX_INFRA = 10
+    
+    # GIS Drainage Constants
+    BASE_DRAIN_CAPACITY_MM_HR = 50.0  # Assumed standard engineering capacity of nearest main drain
     
     for req in requests:
         # Edge cases fallback
@@ -72,6 +78,26 @@ async def calculate_features(requests: List[GridFeatureRequest]):
         # 7. Infrastructure vulnerability
         infra_score = min(req.infrastructure_count / MAX_INFRA, 1.0)
         
+        # --- NEW GIS DRAINAGE CAPACITY LOGIC ---
+        
+        # A. Calculate Effective Drainage Capacity (EDC)
+        # Reduced by GIS proximity (if you are far away, effective capacity drops)
+        # Reuced by Operational efficiency (if drains are clogged, capacity drops)
+        effective_capacity = BASE_DRAIN_CAPACITY_MM_HR * (1.0 - drainage_score) * req.ward_drainage_efficiency
+        effective_capacity = max(effective_capacity, 1.0) # Prevent division by zero
+        
+        # B. Calculate required capacity (Inflow Volume)
+        # Water that cannot be absorbed immediately by the ground
+        # (Rainfall * Area * Impervious Ratio) relative to the unit area
+        inflow_mm_hr = rainfall * impervious_score
+        
+        # C. Calculate Capacity Exceedance Ratio
+        # If > 1.0, the water is arriving faster than the drains can clear it = Flash Flood
+        exceedance_ratio = inflow_mm_hr / effective_capacity
+        
+        # Normalize exceedance for the ML Model (Cap at extremely flooded -> 3.0, scale to 0-1)
+        normalized_exceedance = min(exceedance_ratio / 3.0, 1.0)
+        
         results.append(NormalizedFeatures(
             grid_id=req.grid_id,
             elevation_score=round(elev_score, 4),
@@ -80,7 +106,9 @@ async def calculate_features(requests: List[GridFeatureRequest]):
             impervious_surface_ratio=round(impervious_score, 4),
             rainfall_intensity_index=round(rainfall_score, 4),
             population_exposure_index=round(pop_score, 4),
-            infrastructure_vulnerability_score=round(infra_score, 4)
+            infrastructure_vulnerability_score=round(infra_score, 4),
+            capacity_exceedance_ratio=round(normalized_exceedance, 4),
+            effective_drainage_capacity_mm_hr=round(effective_capacity, 2)
         ))
         
     return results
