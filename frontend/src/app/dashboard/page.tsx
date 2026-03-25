@@ -16,6 +16,7 @@ import CityAdminPanel from '@/components/CityAdminPanel';
 import SystemAdminPanel from '@/components/SystemAdminPanel';
 import WardOfficerDashboard from '@/components/WardOfficerDashboard';
 import LoginForm from '@/components/LoginForm';
+import RoleSelection from '@/components/RoleSelection';
 import { Layers, CloudRain, ShieldAlert, Activity, Users, MapPin, Database, ChevronLeft, Droplets, Zap, ChevronRight, SlidersHorizontal, Radar, ListOrdered, X, LayoutGrid, Lock, LogOut } from 'lucide-react';
 import Link from 'next/link';
 import { ReactCompareSlider } from 'react-compare-slider';
@@ -23,6 +24,7 @@ import { ReactCompareSlider } from 'react-compare-slider';
 export default function DashboardPage() {
     // 4-Tier RBAC State (Null = Not Logged In)
     const [authState, setAuthState] = useState<{ role: string, ward_id: string | null } | null>(null);
+    const [selectedRole, setSelectedRole] = useState<string | null>(null);
     const [isLoggingIn, setIsLoggingIn] = useState(false);
 
     const [activeScenario, setActiveScenario] = useState('none');
@@ -308,7 +310,14 @@ export default function DashboardPage() {
     };
 
     if (!authState) {
-        return <LoginForm onLoginSuccess={handleLoginSuccess} />;
+        if (!selectedRole) {
+            return <RoleSelection onSelectRole={setSelectedRole} />;
+        }
+        return <LoginForm 
+            onLoginSuccess={handleLoginSuccess} 
+            onBack={() => setSelectedRole(null)} 
+            selectedRole={selectedRole} 
+        />;
     }
 
 

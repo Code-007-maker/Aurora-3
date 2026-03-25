@@ -2,13 +2,15 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Lock, Mail, User, Shield, ArrowRight, Loader2, AlertCircle } from 'lucide-react';
+import { Lock, Mail, User, Shield, ArrowRight, Loader2, AlertCircle, ChevronLeft } from 'lucide-react';
 
 interface LoginFormProps {
     onLoginSuccess: (token: string, role: string, ward: string | null) => void;
+    onBack?: () => void;
+    selectedRole?: string | null;
 }
 
-export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
+export default function LoginForm({ onLoginSuccess, onBack, selectedRole }: LoginFormProps) {
     const [mode, setMode] = useState<'login' | 'register'>('login');
     const [identifier, setIdentifier] = useState('');
     const [email, setEmail] = useState('');
@@ -43,6 +45,12 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
                 }
 
                 const data = await res.json();
+                
+                // Role Validation
+                if (selectedRole && data.role !== selectedRole) {
+                    throw new Error(`ACCESS DENIED: YOU ARE NOT ${selectedRole.toUpperCase()}. YOUR ASSIGNED ROLE IS ${data.role.toUpperCase()}.`);
+                }
+
                 onLoginSuccess(data.access_token, data.role, data.ward);
             } else {
                 const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -106,13 +114,25 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
                         >
                             Log In
                         </button>
-                        <button
-                            onClick={() => setMode('register')}
-                            className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${mode === 'register' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-500 hover:text-slate-300'}`}
-                        >
-                            Sign Up
-                        </button>
+                        {(!selectedRole || selectedRole === 'Citizen') && (
+                            <button
+                                onClick={() => setMode('register')}
+                                className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${mode === 'register' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-500 hover:text-slate-300'}`}
+                            >
+                                Sign Up
+                            </button>
+                        )}
                     </div>
+
+                    {onBack && (
+                        <button 
+                            onClick={onBack}
+                            className="absolute -top-12 left-0 flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-blue-400 transition-colors py-2 px-1"
+                        >
+                            <ChevronLeft className="w-4 h-4" />
+                            Back to Role Selection
+                        </button>
+                    )}
 
                     <form onSubmit={handleSubmit} className="space-y-5">
                         {mode === 'login' ? (
