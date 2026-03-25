@@ -9,10 +9,10 @@ conf = ConnectionConfig(
     MAIL_USERNAME=os.getenv("EMAIL_USER"),
     MAIL_PASSWORD=os.getenv("EMAIL_PASS"),
     MAIL_FROM=os.getenv("EMAIL_USER"),
-    MAIL_PORT=465,
-    MAIL_SERVER="smtp.gmail.com",
-    MAIL_STARTTLS=False,
-    MAIL_SSL_TLS=True,
+    MAIL_PORT=int(os.getenv("MAIL_PORT", "465")),
+    MAIL_SERVER=os.getenv("MAIL_SERVER", "smtp.gmail.com"),
+    MAIL_STARTTLS=os.getenv("MAIL_STARTTLS", "False").lower() == "true",
+    MAIL_SSL_TLS=os.getenv("MAIL_SSL_TLS", "True").lower() == "true",
     USE_CREDENTIALS=True,
     VALIDATE_CERTS=True
 )

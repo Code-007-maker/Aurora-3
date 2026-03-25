@@ -70,8 +70,10 @@ async def invite_user(
         logging.info(f"[AUDIT] INVITATION SENT: {current_user.username} invited {email} as {role}.")
         return {"status": "success", "message": f"Invitation sent to {email}"}
     except Exception as e:
-        logging.error(f"Failed to send invitation: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to send invitation email.")
+        import traceback
+        logging.error(f"Failed to send invitation to {email}: {str(e)}")
+        logging.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to send invitation email: {str(e)}")
 
 @router.post("/register")
 async def register_citizen(
