@@ -31,6 +31,7 @@ interface CityAdminPanelProps {
     damageEst: number;
     affectedPop: number;
     submergedArea: number;
+    cityName?: string;
     onBudgetChange: (v: number) => void;
     onPumpsChange: (v: number) => void;
     onClose: () => void;
@@ -252,7 +253,7 @@ function MitigationTab({ floodRiskScore, rainfall, affectedPop, cityReadiness, d
         ],
         strategic: [
             { action: 'Upgrade Rohini-Badli stormwater main (DN-300 to DN-600)', priority: 'S1', impact: '45% drainage capacity increase', cost: '₹180 Cr' },
-            { action: 'Construct 8 underground water retention tanks across East Delhi', priority: 'S2', impact: '3.2M litre surge buffer', cost: '₹240 Cr' },
+            { action: 'Construct underground water retention tanks across high-risk zones', priority: 'S2', impact: '3.2M litre surge buffer', cost: '₹240 Cr' },
             { action: 'Replace 42km outdated sewer network in Mustafabad', priority: 'S1', impact: 'Eliminates 60% backflow incidents', cost: '₹95 Cr' },
             { action: 'Smart sensor grid deployment across 24 wards', priority: 'S2', impact: '6-hour early warning capability', cost: '₹75 Cr' },
         ],
@@ -481,7 +482,7 @@ function RiskTrendTab({ rainfall, floodRiskScore, dynamicWards }: {
 // ─── Main Panel ────────────────────────────────────────────────────────────────
 export default function CityAdminPanel({
     dynamicWards, floodRiskScore, cityReadiness, rainfall, budget, pumps, drainage,
-    damageEst, affectedPop, submergedArea, onBudgetChange, onPumpsChange, onClose
+    damageEst, affectedPop, submergedArea, cityName, onBudgetChange, onPumpsChange, onClose
 }: CityAdminPanelProps) {
     const [activeTab, setActiveTab] = useState('analytics');
 
@@ -508,7 +509,7 @@ export default function CityAdminPanel({
                             </div>
                             <div>
                                 <h2 className="text-base font-bold text-white">Strategic Command Center</h2>
-                                <p className="text-[10px] text-slate-500">City Admin · Delhi NCT · Live Intelligence · All data from real-time flood engine</p>
+                                <p className="text-[10px] text-slate-500">City Admin · {cityName ?? 'Delhi NCT'} · Live Intelligence · All data from real-time flood engine</p>
                             </div>
                         </div>
                         <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 transition-colors">

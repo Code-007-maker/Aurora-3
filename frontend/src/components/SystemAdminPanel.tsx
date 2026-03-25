@@ -30,6 +30,7 @@ interface SystemAdminPanelProps {
     drainage: number;
     cityReadiness: number;
     auditLog: AuditEntry[];
+    onCitySwitch?: (payload: { bbox: number[]; geojson: any; zone_metrics?: any[]; cell_count?: number; area_km2?: number }) => void;
     onClose: () => void;
 }
 
@@ -415,16 +416,68 @@ function AuditTab({ auditLog }: { auditLog: AuditEntry[] }) {
 }
 
 // ─── 5. Multi-City Configuration ──────────────────────────────────────────────
-function MultiCityTab() {
+function MultiCityTab({ onCitySwitch }: { onCitySwitch?: (payload: { bbox: number[]; geojson: any; zone_metrics?: any[]; cell_count?: number; area_km2?: number }) => void }) {
     const [activeCity, setActiveCity] = useState('delhi');
+    const [isUploading, setIsUploading] = useState(false);
+    const [uploadStatus, setUploadStatus] = useState<{ type: 'success' | 'error' | '', msg: string }>({ type: '', msg: '' });
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setIsUploading(true);
+        setUploadStatus({ type: '', msg: '' });
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            const res = await fetch('/api/grid/upload_and_segment', {
+                method: 'POST',
+                body: formData
+            });
+
+            // Read as text first, then parse as JSON safely
+            const rawText = await res.text();
+            let data: any;
+            try {
+                data = JSON.parse(rawText);
+            } catch {
+                // Server returned non-JSON (HTML error page, etc.)
+                setUploadStatus({ type: 'error', msg: `Server error (${res.status}): ${rawText.slice(0, 200)}` });
+                return;
+            }
+
+            if (res.ok && data.status === 'success') {
+                setUploadStatus({ type: 'success', msg: data.message });
+                if (onCitySwitch && data.bbox) {
+                    onCitySwitch({
+                        bbox: data.bbox,
+                        geojson: data.geojson_features,
+                        zone_metrics: data.zone_metrics,
+                        cell_count: data.cell_count,
+                        area_km2: data.area_km2,
+                    });
+                }
+            } else {
+                setUploadStatus({ type: 'error', msg: data.detail || data.message || 'Upload failed' });
+            }
+        } catch (err: any) {
+            setUploadStatus({ type: 'error', msg: err.message || 'Network error' });
+        } finally {
+            setIsUploading(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+    };
 
     const cities = [
         {
-            id: 'delhi', name: 'Delhi NCT', status: 'active', wards: 24, area: '1,484 km²',
+            id: 'delhi', name: 'Delhi NCT', status: 'active', wards: 290, area: '1,484 km²',
             bbox: '28.40°N–28.90°N / 76.85°E–77.35°E', dem: 'SRTM 30m v2.1', rainfallApi: 'IMD NH-04', ready: true,
         },
         {
-            id: 'mumbai', name: 'Mumbai', status: 'offline', wards: 227, area: '603 km²',
+            id: 'mumbai', name: 'Mumbai', status: 'offline', wards: 24, area: '603 km²',
             bbox: '18.90°N–19.27°N / 72.77°E–73.00°E', dem: 'SRTM 30m v1.9', rainfallApi: 'IMD WR', ready: false,
         },
         {
@@ -432,7 +485,7 @@ function MultiCityTab() {
             bbox: '22.45°N–22.65°N / 88.20°E–88.50°E', dem: 'Copernicus 25m', rainfallApi: 'IMD ER', ready: false,
         },
         {
-            id: 'chennai', name: 'Chennai', status: 'offline', wards: 200, area: '426 km²',
+            id: 'chennai', name: 'Chennai', status: 'offline', wards: 201, area: '426 km²',
             bbox: '12.90°N–13.25°N / 80.15°E–80.32°E', dem: 'SRTM 30m v2.0', rainfallApi: 'IMD SR', ready: false,
         },
     ];
@@ -490,13 +543,72 @@ function MultiCityTab() {
                     {selected.id === 'delhi' ? '✓ Currently Active' : selected.ready ? 'Initialize & Switch' : 'Dataset Not Ready — Contact Data Team'}
                 </button>
             </div>
+
+            {/* Premium BYOT File Upload Section */}
+            <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-5 mt-4">
+                <div className="flex justify-between items-center mb-4">
+                    <div>
+                        <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                            <LayersIcon className="w-5 h-5 text-blue-400" /> Bring Your Own Terrain (BYOT)
+                        </h4>
+                        <p className="text-[11px] text-slate-400 mt-1">Upload a custom shapefile (.zip) or .geojson to dynamically generate a risk grid for any city.</p>
+                    </div>
+                </div>
+
+                <div className="flex flex-col gap-3">
+                    <input
+                        type="file"
+                        ref={fileInputRef}
+                        onChange={handleFileUpload}
+                        accept=".geojson,.zip"
+                        className="hidden"
+                    />
+                    <button
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isUploading}
+                        className={`w-full py-3.5 flex items-center justify-center gap-2 text-sm font-bold rounded-xl transition-all ${isUploading
+                            ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                            : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg shadow-blue-500/20 hover:scale-[1.02] active:scale-[0.98]'
+                            }`}
+                    >
+                        {isUploading ? (
+                            <>
+                                <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                                Processing Geometries...
+                            </>
+                        ) : (
+                            <>
+                                <Globe className="w-4 h-4" /> Upload Custom City Shapefile
+                            </>
+                        )}
+                    </button>
+
+                    {/* Upload Status Feedback */}
+                    <AnimatePresence>
+                        {uploadStatus.msg && (
+                            <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                className={`mt-2 p-3 text-xs font-bold rounded-lg flex items-center gap-2 ${uploadStatus.type === 'success'
+                                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                    : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                                    }`}
+                            >
+                                {uploadStatus.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                                {uploadStatus.msg}
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+                </div>
+            </div>
         </div>
     );
 }
 
 // ─── Main Panel ────────────────────────────────────────────────────────────────
 export default function SystemAdminPanel({
-    floodRiskScore, rainfall, budget, pumps, drainage, cityReadiness, auditLog, onClose
+    floodRiskScore, rainfall, budget, pumps, drainage, cityReadiness, auditLog, onCitySwitch, onClose
 }: SystemAdminPanelProps) {
     const [activeTab, setActiveTab] = useState('sensitivity');
 
@@ -562,7 +674,7 @@ export default function SystemAdminPanel({
                                 {activeTab === 'dataset' && <DatasetIntegrityTab rainfall={rainfall} />}
                                 {activeTab === 'health' && <SystemHealthTab floodRiskScore={floodRiskScore} rainfall={rainfall} />}
                                 {activeTab === 'audit' && <AuditTab auditLog={auditLog} />}
-                                {activeTab === 'multicity' && <MultiCityTab />}
+                                {activeTab === 'multicity' && <MultiCityTab onCitySwitch={onCitySwitch} />}
                             </motion.div>
                         </AnimatePresence>
                     </div>

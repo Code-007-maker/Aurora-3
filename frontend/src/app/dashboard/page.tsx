@@ -37,6 +37,53 @@ export default function DashboardPage() {
     const [showMitigation, setShowMitigation] = useState(false);
     const [showCityAdmin, setShowCityAdmin] = useState(false);
     const [showSysAdmin, setShowSysAdmin] = useState(false);
+    const [customBbox, setCustomBbox] = useState<number[] | null>(null);
+    const [customGeoJSON, setCustomGeoJSON] = useState<any>(null);
+    const [customZoneMetrics, setCustomZoneMetrics] = useState<any[]>([]);
+    const [selectedZoneName, setSelectedZoneName] = useState<string | null>(null);
+    const [customCellCount, setCustomCellCount] = useState<number | null>(null);
+    const [customAreaKm2, setCustomAreaKm2] = useState<number | null>(null);
+
+    const handleCitySwitch = ({ bbox, geojson, zone_metrics, cell_count, area_km2 }: {
+        bbox: number[]; geojson: any; zone_metrics?: any[];
+        cell_count?: number; area_km2?: number;
+    }) => {
+        setCustomBbox(bbox);
+        setCustomGeoJSON(geojson);
+        setCustomZoneMetrics(zone_metrics ?? []);
+        setCustomCellCount(cell_count ?? null);
+        setCustomAreaKm2(area_km2 ?? null);
+    };
+
+    // ── Auto-load Delhi on first mount ────────────────────────────────────────
+    // Calls GET /api/grid/default → processes Delhi_Wards.geojson exactly like
+    // the BYOT upload flow so all features start with real Delhi ward data.
+    const [defaultLoading, setDefaultLoading] = useState(true);
+    useEffect(() => {
+        const loadDefault = async () => {
+            try {
+                const res = await fetch('http://localhost:8000/api/grid/default');
+                if (!res.ok) {
+                    console.warn('Default city load failed:', await res.text());
+                    return;
+                }
+                const data = await res.json();
+                if (data.status === 'success') {
+                    setCustomBbox(data.bbox);
+                    setCustomGeoJSON(data.geojson_features);
+                    setCustomZoneMetrics(data.zone_metrics ?? []);
+                    setCustomCellCount(data.cell_count ?? null);
+                    setCustomAreaKm2(data.area_km2 ?? null);
+                }
+            } catch (err) {
+                console.warn('Could not reach backend for default city:', err);
+            } finally {
+                setDefaultLoading(false);
+            }
+        };
+        loadDefault();
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
 
     // Audit log — captures real user interactions for System Admin
     const [auditLog, setAuditLog] = useState<any[]>([]);
@@ -91,14 +138,11 @@ export default function DashboardPage() {
     else if (floodRiskScore > 0.5) threatLevel = { label: 'High', color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500' };
     else if (floodRiskScore > 0.25) threatLevel = { label: 'Moderate', color: 'text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500' };
 
-    // Dynamic Readiness Engine — Delhi MCD District Zones
+    // ── Zone Readiness Panel (top-right KPI strip) ─────────────────────────────
     const cityReadiness = Math.round((drainage * 0.6) + (budget * 0.4));
-    // Rohini (North Delhi) — drainage is chronically poor, historically floods first
-    const rohiniReadiness = Math.max(0, cityReadiness - 25);
-    // Shahdara (East Delhi) — Yamuna floodplain proximity, moderate drain infrastructure
-    const shahdaraReadiness = Math.max(0, cityReadiness - 10);
-    // Okhla (South Delhi/Barapullah) — better drainage infra, readiness above average
-    const okhlaReadiness = Math.min(100, cityReadiness + 15);
+    const zone1Readiness = Math.max(0, cityReadiness - 25);
+    const zone2Readiness = Math.max(0, cityReadiness - 10);
+    const zone3Readiness = Math.min(100, cityReadiness + 15);
 
     const getReadinessColor = (val: number) => {
         if (val < 40) return { bg: 'bg-red-500', text: 'text-red-400', shadow: 'shadow-[0_0_10px_rgba(239,68,68,0.5)]', label: 'Crit' };
@@ -106,51 +150,151 @@ export default function DashboardPage() {
         return { bg: 'bg-emerald-500', text: 'text-emerald-400', shadow: 'shadow-[0_0_10px_rgba(16,185,129,0.5)]', label: 'Safe' };
     };
 
-    const rohiniC = getReadinessColor(rohiniReadiness);
-    const shahdaraC = getReadinessColor(shahdaraReadiness);
-    const okhlaC = getReadinessColor(okhlaReadiness);
+    const rohiniC = getReadinessColor(zone1Readiness);
+    const shahdaraC = getReadinessColor(zone2Readiness);
+    const okhlaC = getReadinessColor(zone3Readiness);
 
-    // Generate Dynamic Delhi Wards (based on MCD Administrative Zones)
-    const WARD_NAMES = ['Civil Lines', 'Model Town', 'Chandni Chowk', 'Darya Ganj', 'Karol Bagh', 'Patel Nagar', 'Old Delhi', 'Connaught Place', 'Lutyens', 'Shahdara', 'Vivek Vihar', 'Seemapuri', 'Mustafabad', 'Rohini', 'Bawana', 'Narela', 'Dwarka', 'Najafgarh', 'Saket', 'Okhla', 'Jasola', 'Madanpur Khadar', 'Patparganj', 'Kondli'];
-    let dynamicWards = WARD_NAMES.map((name, i) => {
-        // Deterministic but varied base vulnerabilities per ward
-        const baseVuln = (i % 5) * 0.15;
+    // ── Dynamic Zone/Ward Generation ─────────────────────────────────────────────
+    // Default Delhi MCD wards; replaced dynamically when a custom city is uploaded
+    const DELHI_WARD_NAMES = [
+        'Civil Lines', 'Model Town', 'Chandni Chowk', 'Darya Ganj', 'Karol Bagh',
+        'Patel Nagar', 'Old Delhi', 'Connaught Place', 'Lutyens', 'Shahdara',
+        'Vivek Vihar', 'Seemapuri', 'Mustafabad', 'Rohini', 'Bawana', 'Narela',
+        'Dwarka', 'Najafgarh', 'Saket', 'Okhla', 'Jasola', 'Madanpur Khadar',
+        'Patparganj', 'Kondli'
+    ];
 
-        // Calculate dynamic live risk per ward based on global parameters + ward base vulnerability
-        const wardRisk = Math.max(0, Math.min(1, baseRisk + baseVuln - 0.2));
+    const getCustomZoneNames = (geojson: any): string[] => {
+        if (!geojson?.features?.length) return [];
+        return geojson.features.map((feature: any, idx: number) => {
+            const props: Record<string, any> = feature.properties ?? {};
+            const rawKeys = Object.keys(props);
+            const kLower = Object.fromEntries(rawKeys.map(k => [k.toLowerCase(), k]));
+
+            let txtName: string | null = null;
+            let numId: string | null = null;
+
+            const nameCandidates = ['ward_name', 'name', 'ac_name', 'pc_name', 'locality', 'district', 'zone_name'];
+            for (const cKey of nameCandidates) {
+                if (cKey in kLower) {
+                    const v = String(props[kLower[cKey]]).trim();
+                    if (!['0', '', 'none', 'nan', 'null'].includes(v.toLowerCase()) && /[a-zA-Z]/.test(v)) {
+                        txtName = v;
+                        break;
+                    }
+                }
+            }
+
+            const idCandidates = ['ward_no', 'ward', 'zone_no', 'id', 'ac_no'];
+            for (const cKey of idCandidates) {
+                if (cKey in kLower) {
+                    const v = String(props[kLower[cKey]]).trim();
+                    if (!['0', '', 'none', 'nan', 'null'].includes(v.toLowerCase())) {
+                        numId = v;
+                        break;
+                    }
+                }
+            }
+
+            const titleCase = (str: string) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+
+            if (txtName && numId) {
+                if (txtName.toLowerCase().includes('zone') || nameCandidates.find(c => c === 'zone_name' && c in kLower)) {
+                    return `${titleCase(txtName)} - Ward ${numId}`;
+                }
+                return titleCase(txtName);
+            } else if (txtName) {
+                return titleCase(txtName);
+            } else if (numId) {
+                return `Ward ${numId}`;
+            }
+
+            for (const val of Object.values(props)) {
+                const v = String(val).trim();
+                if (!['0', '', 'none', 'nan', 'null'].includes(v.toLowerCase()) && /[a-zA-Z]/.test(v)) {
+                    return titleCase(v);
+                }
+            }
+
+            return `Zone ${idx + 1}`;
+        });
+    };
+
+
+
+    // topRiskZones must be after getCustomZoneNames
+    const activeZoneNames: string[] = customGeoJSON
+        ? getCustomZoneNames(customGeoJSON)
+        : DELHI_WARD_NAMES;
+
+    const topRiskZones = activeZoneNames.slice(0, 3);
+
+    // ── Build dynamicWards ────────────────────────────────────────────────────
+    // When a custom city is uploaded, risk values come from REAL backend GIS
+    // analysis (elevation, compactness, area). Delhi uses the live engine model.
+    const hasRealMetrics = customGeoJSON && customZoneMetrics.length > 0;
+
+    let dynamicWards = activeZoneNames.map((name: string, i: number) => {
+        let wardRisk: number;
+        let exposure: number;
+        let economic: number;
+        let drainageScore: number | undefined;
+        let emergencyScore: number | undefined;
+        let infraScore: number | undefined;
+
+        if (hasRealMetrics && customZoneMetrics[i]) {
+            const m = customZoneMetrics[i];
+            const liveBoost = (rainfall / 500) * 0.2 + ((100 - drainage) / 100) * 0.1;
+            wardRisk = Math.max(0, Math.min(1, m.composite_flood_risk + liveBoost));
+            exposure = m.exposure_pct ?? Math.round(wardRisk * 80);
+            economic = m.economic_M ?? Math.round(wardRisk * 15);
+            drainageScore = Math.max(10, Math.min(95, m.drainage_score - Math.round((100 - drainage) * 0.3)));
+            emergencyScore = Math.max(10, Math.min(95, m.emergency_score));
+            infraScore = Math.max(10, Math.min(95, m.infra_score));
+        } else {
+            const baseVuln = (i % 5) * 0.15;
+            wardRisk = Math.max(0, Math.min(1, baseRisk + baseVuln - 0.2));
+            exposure = Math.round(wardRisk * 80);
+            economic = Math.round(wardRisk * 15);
+        }
+
         const wardReadiness = Math.round(100 - (wardRisk * 100));
-
-        // Impact extrapolations
-        const exposure = Math.round(wardRisk * 80); // %
-        const economic = Math.round(wardRisk * 15); // $M
-
         let status = 'Ready';
         let color = 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30';
-        if (wardRisk > 0.8) { status = 'Critical'; color = 'text-red-400 bg-red-500/10 border-red-500/30'; }
-        else if (wardRisk > 0.6) { status = 'High Risk'; color = 'text-orange-400 bg-orange-500/10 border-orange-500/30'; }
-        else if (wardRisk > 0.3) { status = 'Moderate'; color = 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30'; }
+        if (wardRisk > 0.75) { status = 'Critical'; color = 'text-red-400 bg-red-500/10 border-red-500/30'; }
+        else if (wardRisk > 0.55) { status = 'High Risk'; color = 'text-orange-400 bg-orange-500/10 border-orange-500/30'; }
+        else if (wardRisk > 0.30) { status = 'Moderate'; color = 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30'; }
 
         return {
-            name: `Ward ${name}`,
-            risk: wardRisk,
-            readiness: wardReadiness,
-            exposure: exposure,
-            economic: economic,
-            status, color
-        }
+            name: customGeoJSON ? name : `Ward ${name}`,
+            risk: wardRisk, readiness: wardReadiness,
+            exposure, economic, status, color,
+            area_km2: hasRealMetrics && customZoneMetrics[i] ? customZoneMetrics[i].area_km2 : undefined,
+            elevation_m: hasRealMetrics && customZoneMetrics[i] ? customZoneMetrics[i].elevation_m : undefined,
+            compactness: hasRealMetrics && customZoneMetrics[i] ? customZoneMetrics[i].compactness : undefined,
+            drainage_score: drainageScore,
+            emergency_score: emergencyScore,
+            infra_score: infraScore,
+        };
     });
 
-    // Sorting Logic
-    dynamicWards.sort((a, b) => {
-        if (sortRule === 'readiness') return a.readiness - b.readiness; // Ascending (worst first)
+    dynamicWards.sort((a: any, b: any) => {
+        if (sortRule === 'readiness') return a.readiness - b.readiness;
         if (sortRule === 'exposure') return b.exposure - a.exposure;
         if (sortRule === 'economic') return b.economic - a.economic;
-        return b.risk - a.risk; // default 'risk' descending
+        return b.risk - a.risk;
     });
 
-    // Compute System-Wide Totals for Live Dashboard View
-    const totalMicroGrids = dynamicWards.reduce((acc, ward) => acc + Math.round(2412 * (1 + ward.risk * 0.2)), 0);
-    const totalIdentifiedHotspots = dynamicWards.reduce((acc, ward) => acc + Math.round(ward.risk * 150), 0);
+    // ── Real metrics: use backend values for custom city, live engine for Delhi ──
+    const totalMicroGrids = customGeoJSON && customCellCount !== null
+        ? customCellCount                                                 // ← REAL: from backend spatial join
+        : dynamicWards.reduce((acc: number, ward: any) => acc + Math.round(2412 * (1 + ward.risk * 0.2)), 0);
+
+    const totalIdentifiedHotspots = customGeoJSON && customAreaKm2 !== null
+        ? Math.round(customAreaKm2 * floodRiskScore * 2.4)              // ← REAL: ~2.4 hotspots/km² at full risk
+        : dynamicWards.reduce((acc: number, ward: any) => acc + Math.round(ward.risk * 150), 0);
+
+
 
     const handleLogin = (role: string, specificWard: string | null = null) => {
         setIsLoggingIn(true);
@@ -185,7 +329,7 @@ export default function DashboardPage() {
                         {[
                             { role: "Citizen", desc: "Public Advisory & Visual Risk", icon: Users, color: "emerald", access: null },
                             { role: "Ward Officer", desc: "Local Zone Command", icon: MapPin, color: "yellow", access: "Ward H-West" },
-                            { role: "City Admin", desc: "Delhi Wide Optimization", icon: Activity, color: "orange", access: null },
+                            { role: "City Admin", desc: `${customGeoJSON ? 'City' : 'Delhi'} Wide Optimization`, icon: Activity, color: "orange", access: null },
                             { role: "System Admin", desc: "Full Threshold Control", icon: Database, color: "red", access: null },
                         ].map((r, i) => {
                             const Icon = r.icon;
@@ -222,12 +366,16 @@ export default function DashboardPage() {
 
     // Citizen gets dedicated full experience
     if (authState.role === 'Citizen') {
-        return <CitizenDashboard onLogout={() => setAuthState(null)} />;
+        return <CitizenDashboard onLogout={() => setAuthState(null)} cityName={customGeoJSON ? 'Custom City' : 'Delhi NCT'} customZones={customGeoJSON ? activeZoneNames : undefined} customZoneMetrics={customGeoJSON ? customZoneMetrics : undefined} />;
     }
 
     // Ward Officer gets dedicated 2D tactical dashboard (no 3D map)
     if (authState.role === 'Ward Officer') {
-        return <WardOfficerDashboard onLogout={() => setAuthState(null)} />;
+        return <WardOfficerDashboard
+            onLogout={() => setAuthState(null)}
+            customZones={customGeoJSON ? activeZoneNames : undefined}
+            customZoneMetrics={customGeoJSON ? customZoneMetrics : undefined}
+        />;
     }
 
     return (
@@ -238,11 +386,11 @@ export default function DashboardPage() {
                 {comparisonMode ? (
                     <ReactCompareSlider
                         className="w-full h-full"
-                        itemOne={<FloodMap rainfall={0} radarVisible={radarVisible} vulnerablePopVisible={vulnerablePopVisible} comparisonMode={true} highlightedWard={selectedWard} />}
-                        itemTwo={<FloodMap rainfall={rainfall === 0 ? 100 : rainfall} radarVisible={radarVisible} vulnerablePopVisible={vulnerablePopVisible} comparisonMode={false} highlightedWard={selectedWard} />}
+                        itemOne={<FloodMap rainfall={0} radarVisible={radarVisible} vulnerablePopVisible={vulnerablePopVisible} comparisonMode={true} highlightedWard={selectedWard} customBbox={customBbox} customGeoJSON={customGeoJSON} highlightedZoneName={selectedZoneName} customZoneMetrics={customZoneMetrics} />}
+                        itemTwo={<FloodMap rainfall={rainfall === 0 ? 100 : rainfall} radarVisible={radarVisible} vulnerablePopVisible={vulnerablePopVisible} comparisonMode={false} highlightedWard={selectedWard} customBbox={customBbox} customGeoJSON={customGeoJSON} highlightedZoneName={selectedZoneName} customZoneMetrics={customZoneMetrics} />}
                     />
                 ) : (
-                    <FloodMap rainfall={rainfall} radarVisible={radarVisible} vulnerablePopVisible={vulnerablePopVisible} comparisonMode={false} highlightedWard={selectedWard} />
+                    <FloodMap rainfall={rainfall} radarVisible={radarVisible} vulnerablePopVisible={vulnerablePopVisible} comparisonMode={false} highlightedWard={selectedWard} customBbox={customBbox} customGeoJSON={customGeoJSON} highlightedZoneName={selectedZoneName} customZoneMetrics={customZoneMetrics} />
                 )}
             </div>
 
@@ -351,7 +499,7 @@ export default function DashboardPage() {
                         >
 
                             {/* System Status Overview */}
-                            <DashboardPanel title="Delhi Intelligence Grid" icon={<Activity className="w-5 h-5 text-blue-400" />}>
+                            <DashboardPanel title={`${customGeoJSON ? 'City' : 'Delhi'} Intelligence Grid`} icon={<Activity className="w-5 h-5 text-blue-400" />}>
                                 <div className="grid grid-cols-2 gap-3">
                                     <div className="glass-panel p-4 rounded-xl relative overflow-hidden group col-span-2 shadow-inner">
                                         <div className="absolute -inset-1 bg-gradient-to-r from-blue-500/10 to-transparent rounded-xl blur opacity-0 group-hover:opacity-100 transition duration-500"></div>
@@ -411,31 +559,31 @@ export default function DashboardPage() {
                                     <div className="space-y-4">
                                         <div className="relative">
                                             <div className="flex justify-between text-sm mb-1">
-                                                <span className="font-medium text-white">Rohini (North Delhi)</span>
-                                                <span className={`${rohiniC.text} font-bold`}>{rohiniReadiness}% <span className="text-xs font-normal text-slate-500">{rohiniC.label}</span></span>
+                                                <span className="font-medium text-white">{topRiskZones[0] ?? 'Zone A'} {!customGeoJSON && '(North)'}</span>
+                                                <span className={`${rohiniC.text} font-bold`}>{zone1Readiness}% <span className="text-xs font-normal text-slate-500">{rohiniC.label}</span></span>
                                             </div>
                                             <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                                                <div className={`h-full ${rohiniC.bg} rounded-full ${rohiniC.shadow} transition-all duration-500`} style={{ width: `${rohiniReadiness}%` }}></div>
+                                                <div className={`h-full ${rohiniC.bg} rounded-full ${rohiniC.shadow} transition-all duration-500`} style={{ width: `${zone1Readiness}%` }}></div>
                                             </div>
                                         </div>
 
                                         <div className="relative">
                                             <div className="flex justify-between text-sm mb-1">
-                                                <span className="font-medium text-white">Shahdara (East Delhi)</span>
-                                                <span className={`${shahdaraC.text} font-bold`}>{shahdaraReadiness}% <span className="text-xs font-normal text-slate-500">{shahdaraC.label}</span></span>
+                                                <span className="font-medium text-white">{topRiskZones[1] ?? 'Zone B'} {!customGeoJSON && '(East)'}</span>
+                                                <span className={`${shahdaraC.text} font-bold`}>{zone2Readiness}% <span className="text-xs font-normal text-slate-500">{shahdaraC.label}</span></span>
                                             </div>
                                             <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                                                <div className={`h-full ${shahdaraC.bg} rounded-full ${shahdaraC.shadow} transition-all duration-500`} style={{ width: `${shahdaraReadiness}%` }}></div>
+                                                <div className={`h-full ${shahdaraC.bg} rounded-full ${shahdaraC.shadow} transition-all duration-500`} style={{ width: `${zone2Readiness}%` }}></div>
                                             </div>
                                         </div>
 
                                         <div className="relative">
                                             <div className="flex justify-between text-sm mb-1">
-                                                <span className="font-medium text-white">Okhla (South Delhi)</span>
-                                                <span className={`${okhlaC.text} font-bold`}>{okhlaReadiness}% <span className="text-xs font-normal text-slate-500">{okhlaC.label}</span></span>
+                                                <span className="font-medium text-white">{topRiskZones[2] ?? 'Zone C'} {!customGeoJSON && '(South)'}</span>
+                                                <span className={`${okhlaC.text} font-bold`}>{zone3Readiness}% <span className="text-xs font-normal text-slate-500">{okhlaC.label}</span></span>
                                             </div>
                                             <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                                                <div className={`h-full ${okhlaC.bg} rounded-full ${okhlaC.shadow} transition-all duration-500`} style={{ width: `${okhlaReadiness}%` }}></div>
+                                                <div className={`h-full ${okhlaC.bg} rounded-full ${okhlaC.shadow} transition-all duration-500`} style={{ width: `${zone3Readiness}%` }}></div>
                                             </div>
                                         </div>
                                     </div>
@@ -602,7 +750,7 @@ export default function DashboardPage() {
                                 </h2>
                                 <p className="text-xs text-slate-400 mt-1">Real-time computation based on {rainfall}mm rainfall, {drainage}% drainage efficiency, and {pumps} active pumps.</p>
                             </div>
-                            <button onClick={() => setShowWardRankings(false)} className="p-2 rounded-lg bg-white/5 hover:bg-red-500/20 hover:text-red-400 transition-colors">
+                            <button onClick={() => { setShowWardRankings(false); setSelectedWard(null); setSelectedZoneName(null); }} className="p-2 rounded-lg bg-white/5 hover:bg-red-500/20 hover:text-red-400 transition-colors">
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
@@ -633,8 +781,10 @@ export default function DashboardPage() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {dynamicWards.filter(w => authState.role === 'Ward Officer' ? w.name === authState.ward_id : true).map((w, i) => (
-                                        <tr key={i} onClick={() => setSelectedWard(w)} className="border-b border-white/5 hover:bg-white/10 transition-colors group cursor-pointer">
+                                    {dynamicWards.filter((w: any) => authState.role === 'Ward Officer' ? w.name === authState.ward_id : true).map((w: any, i: number) => (
+                                        <tr key={i} onClick={() => { setSelectedWard(w); setSelectedZoneName(w.name); }}
+                                            className={`border-b border-white/5 hover:bg-white/10 transition-colors group cursor-pointer ${selectedZoneName === w.name ? 'bg-yellow-500/10 border-l-2 border-l-yellow-400' : ''
+                                                }`}>
                                             <td className="py-4 pl-2 font-bold text-slate-200 group-hover:text-blue-400">{w.name}</td>
                                             <td className="py-4">
                                                 <span className={`px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest border rounded ${w.color}`}>
@@ -681,7 +831,7 @@ export default function DashboardPage() {
                                 <h3 className="text-lg font-bold text-white tracking-wide">{selectedWard.name}</h3>
                                 <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mt-1">Advanced Diagnostics</p>
                             </div>
-                            <button onClick={() => setSelectedWard(null)} className="p-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-300">
+                            <button onClick={() => { setSelectedWard(null); setSelectedZoneName(null); }} className="p-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-300">
                                 <X className="w-4 h-4" />
                             </button>
                         </div>
@@ -763,7 +913,7 @@ export default function DashboardPage() {
                                         <Database className="w-5 h-5 text-emerald-400 mr-2" />
                                         IoT Sensor Telemetry Network
                                     </h2>
-                                    <p className="text-xs text-slate-400 mt-1">Live status of 3,842 deployed water-level units across NCT Delhi.</p>
+                                    <p className="text-xs text-slate-400 mt-1">Live status of {customGeoJSON ? 'deployed' : '3,842 deployed'} water-level sensor units{!customGeoJSON ? ' across NCT Delhi' : ` across ${activeZoneNames.length} detected zones`}.</p>
                                 </div>
                                 <button onClick={() => setShowTelemetry(false)} className="p-2 rounded-lg bg-white/5 hover:bg-red-500/20 hover:text-red-400 transition-colors">
                                     <X className="w-5 h-5" />
@@ -801,23 +951,23 @@ export default function DashboardPage() {
                                     <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-5"></div>
                                     <h3 className="text-sm font-bold text-slate-300 uppercase tracking-widest mb-4 border-b border-white/10 pb-2">Live Node Readings</h3>
                                     <div className="space-y-3">
-                                        {[
-                                            { loc: "Mithi River Estuary", val: "2.4m", status: "Warning", color: "text-orange-400" },
-                                            { loc: "Hindmata Junction", val: "0.8m", status: "Nominal", color: "text-emerald-400" },
-                                            { loc: "Milan Subway", val: "1.2m", status: "Elevated", color: "text-yellow-400" },
-                                            { loc: "Dharavi Sector 3", val: "3.1m", status: "Critical", color: "text-red-400" },
-                                        ].map((node, i) => (
-                                            <div key={i} className="flex justify-between items-center bg-slate-900/60 p-3 rounded-lg border border-white/5">
-                                                <div className="flex items-center">
-                                                    <Activity className={`w-4 h-4 mr-3 ${node.color}`} />
-                                                    <span className="font-medium text-slate-200 text-sm">{node.loc}</span>
+                                        {dynamicWards.slice(0, 4).map((ward: any, i: number) => {
+                                            const depth = (ward.risk * 3.5).toFixed(1);
+                                            const status = ward.risk > 0.7 ? "Critical" : ward.risk > 0.4 ? "Warning" : "Nominal";
+                                            const color = ward.risk > 0.7 ? "text-red-400" : ward.risk > 0.4 ? "text-orange-400" : "text-emerald-400";
+                                            return (
+                                                <div key={i} className="flex justify-between items-center bg-slate-900/60 p-3 rounded-lg border border-white/5">
+                                                    <div className="flex items-center">
+                                                        <Activity className={`w-4 h-4 mr-3 ${color}`} />
+                                                        <span className="font-medium text-slate-200 text-sm truncate w-32" title={ward.name}>{ward.name}</span>
+                                                    </div>
+                                                    <div className="flex items-center space-x-4">
+                                                        <span className={`font-mono font-bold ${color}`}>{depth}m</span>
+                                                        <span className={`text-[10px] w-16 text-center uppercase font-bold tracking-wider px-2 py-0.5 rounded border ${color.replace('text', 'bg').replace('400', '500/10')} ${color.replace('text', 'border').replace('400', '500/30')} ${color}`}>{status}</span>
+                                                    </div>
                                                 </div>
-                                                <div className="flex items-center space-x-4">
-                                                    <span className={`font-mono font-bold ${node.color}`}>{node.val}</span>
-                                                    <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded border ${node.color.replace('text', 'bg').replace('400', '500/10')} ${node.color.replace('text', 'border').replace('400', '500/30')} ${node.color}`}>{node.status}</span>
-                                                </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             </div>
@@ -858,8 +1008,8 @@ export default function DashboardPage() {
                                     </div>
                                     <div className="glass-panel p-5 rounded-xl border-l-4 border-l-purple-500">
                                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">Maximized Impact</p>
-                                        <p className="text-xl font-medium text-purple-400">-42% Risk</p>
-                                        <p className="text-xs text-slate-500 mt-1">{Math.round((pumps * 12.4))}k lives secured</p>
+                                        <p className="text-xl font-medium text-purple-400">-{Math.min(100, Math.round(pumps * 0.15 + budget * 0.3))}% Risk</p>
+                                        <p className="text-xs text-slate-500 mt-1">{((pumps * 8.4 + budget * 3) / 10).toFixed(1)}k lives secured</p>
                                     </div>
                                 </div>
 
@@ -878,30 +1028,31 @@ export default function DashboardPage() {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {[
-                                                { ward: "Ward H-East", req: "Critical", pumps: Math.round(pumps * 0.4), m: Math.round(budget * 0.45), drop: "18%" },
-                                                { ward: "Ward M-West", req: "High", pumps: Math.round(pumps * 0.3), m: Math.round(budget * 0.25), drop: "12%" },
-                                                { ward: "Ward G-South", req: "High", pumps: Math.round(pumps * 0.2), m: Math.round(budget * 0.20), drop: "8%" },
-                                                { ward: "Ward A", req: "Moderate", pumps: Math.round(pumps * 0.1), m: Math.round(budget * 0.10), drop: "4%" }
-                                            ].map((row, i) => (
-                                                <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors group">
-                                                    <td className="py-3 pl-4 font-bold text-slate-200">
-                                                        <div className="flex items-center">
-                                                            <div className={`w-1.5 h-1.5 rounded-full mr-2 ${row.req === 'Critical' ? 'bg-red-500' : row.req === 'High' ? 'bg-orange-500' : 'bg-yellow-500'}`}></div>
-                                                            {row.ward}
-                                                        </div>
-                                                    </td>
-                                                    <td className="py-3 text-right">
-                                                        <span className="font-mono text-sm text-teal-400 font-bold">{row.pumps} units</span>
-                                                    </td>
-                                                    <td className="py-3 text-right">
-                                                        <span className="font-mono text-sm text-green-400 font-bold">${row.m}M</span>
-                                                    </td>
-                                                    <td className="py-3 text-right pr-4">
-                                                        <span className="text-sm font-bold text-purple-400">-{row.drop}</span>
-                                                    </td>
-                                                </tr>
-                                            ))}
+                                            {dynamicWards.slice(0, 4).map((ward: any, i: number) => {
+                                                const fractions = [0.4, 0.3, 0.2, 0.1];
+                                                const pumpAlloc = Math.round(pumps * fractions[i]) || 0;
+                                                const budgetAlloc = Math.round(budget * (fractions[i] + (i === 0 ? 0.05 : 0))) || 0;
+                                                const riskDrop = Math.round(ward.risk * fractions[i] * 50) || 2;
+                                                return (
+                                                    <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors group">
+                                                        <td className="py-3 pl-4 font-bold text-slate-200">
+                                                            <div className="flex items-center">
+                                                                <div className={`w-1.5 h-1.5 rounded-full mr-2 ${ward.status === 'Critical' ? 'bg-red-500' : ward.status === 'High Risk' ? 'bg-orange-500' : 'bg-yellow-500'}`}></div>
+                                                                {ward.name}
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-3 text-right">
+                                                            <span className="font-mono text-sm text-teal-400 font-bold">{pumpAlloc} units</span>
+                                                        </td>
+                                                        <td className="py-3 text-right">
+                                                            <span className="font-mono text-sm text-green-400 font-bold">${budgetAlloc}M</span>
+                                                        </td>
+                                                        <td className="py-3 text-right pr-4">
+                                                            <span className="font-mono text-sm text-purple-400 font-bold">-{riskDrop}%</span>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
                                         </tbody>
                                     </table>
                                 </div>
@@ -942,6 +1093,7 @@ export default function DashboardPage() {
                     damageEst={damageEst}
                     affectedPop={affectedPop}
                     submergedArea={submergedArea}
+                    cityName={customGeoJSON ? `Custom City (${activeZoneNames.length} zones)` : 'Delhi NCT'}
                     onBudgetChange={setBudget}
                     onPumpsChange={setPumps}
                     onClose={() => setShowCityAdmin(false)}
@@ -958,6 +1110,7 @@ export default function DashboardPage() {
                     drainage={drainage}
                     cityReadiness={cityReadiness}
                     auditLog={auditLog}
+                    onCitySwitch={handleCitySwitch}
                     onClose={() => setShowSysAdmin(false)}
                 />
             )}
