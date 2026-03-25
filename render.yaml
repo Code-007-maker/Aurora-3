@@ -15,11 +15,11 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: MAIL_PORT
-        value: 465
+        value: 587
       - key: MAIL_SSL_TLS
-        value: "True"
-      - key: MAIL_STARTTLS
         value: "False"
+      - key: MAIL_STARTTLS
+        value: "True"
 
   # 2. Frontend Service (Next.js)
   - type: web
